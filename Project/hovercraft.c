@@ -1,8 +1,9 @@
 long lastObstacleTime;
 #define PI 3.1415926535897932384626433832795
 float servo_position = 0;
-int state;
+int thrustState;
 float throttle;
+int liftState;
 
 void setup() {
   // put your setup code here, to run once:
@@ -10,8 +11,9 @@ void setup() {
   Serial.begin(115200); 
   Serial.setTimeout(5);
   lastObstacleTime = -1;
-  state = 0;
+  thrustState = 0;
   throttle = 0;
+  liftState = 1;
 }
 
 
@@ -27,7 +29,7 @@ void serialWait(){
 }
 
 void turn_right() {
-  state = 1; //  fan_on
+  thrustState = 1; //  fan_on
   throttle = 0.5;
   servo_position = PI/-2;
   delay(500);
@@ -35,13 +37,13 @@ void turn_right() {
 }
 
 void go_forward() {
-  state = 1; //  thrust_fan_on
+  thrustState = 1; //  thrust_fan_on
   throttle = 1;
   servo_position = 0;
 }
 
 void turn_left() {
-  state = 1; //  thrust_fan_on
+  thrustState = 1; //  thrust_fan_on
   servo_position = PI/2;
   throttle = 0.5;
   delay(500);
@@ -75,9 +77,11 @@ void loop() {
 
   Serial.print(servo_position);
   Serial.print(",");
-  Serial.print(state);
+  Serial.print(thrustState);
   Serial.print(",");
   Serial.print(throttle);
+  Serial.print(",");
+  Serial.print(liftState);
   Serial.print("\r\n");
 
 
