@@ -5,14 +5,10 @@ sim.setThreadSwitchTiming(10) -- Default timing for automatic thread switching
 baudrate=115200
 --Section 1.1 **************************************************
     --You MUST modify this to match the COM# of your arduino board
-    serialPortNum = ****
-    portName="\\\\.\\COM"..serialPortNum 
-
-
+portName="/dev/tty.usbmodem14101"
 --**************************************************************
 sensorPrecision = 0.001
 sim.setIntegerSignal('Consoles',0)
-keyboard_ctrl = 0
 sim.setIntegerSignal('lift',0)
 
 --Open serial port communication
@@ -27,17 +23,16 @@ end
 --Section 1.2 **************************************************
 --Retrieve the handles of your key components
 --Main hovercraft body ground contact patch
-hovercraftBase=sim.getObjectAssociatedWithScript(sim.handle_self) -- this is bubbleRob's handle
+body=sim.getObjectHandle("contactPatch")
 --Sensor(s)
-noseSensor_frontBase=sim.getObjectHandle("sensingNose_front") -- Handle of the proximity front sensor
-noseSensor_rightBase=sim.getObjectHandle("sensingNose_right") -- Handle of the proximity right sensor
+noseSensor_frontBase=sim.getObjectHandle("frontSensor") -- Handle of the proximity front sensor
+noseSensor_rightBase=sim.getObjectHandle("rightSensor") -- Handle of the proximity right sensor
 --Propeller(s)
-thrust_fanBase=sim.getObjectHandle("thrust_fan") -- Handle of the thrust fan
+thrust_fanBase=sim.getObjectHandle("thrust_fanBase") -- Handle of the thrust fan
 --Dedicated Lift fan
-lift_fanBase=sim.getObjectHandle("lift_fan") -- Handle of the lift fan
+lift_fanBase=sim.getObjectHandle("lift_fanBase") -- Handle of the lift fan
 --Servo(s)
-servoBase=sim.getObjectHandle("servo") -- Handle of the servo
-
+servoBase=sim.getObjectHandle("BigServo_Base") -- Handle of the servo
 
 --**************************************************************
 
@@ -51,37 +46,33 @@ while sim.getSimulationState() ~= sim.simulation_advancing_abouttostop do
         --Use received data to control hovercraft 
     
     --SENSING section ----------------------------------------------------
-    front_sensor, distance_front = read_sensor(noseSensor_frontBase) -- Read the proximity sensor
-    right_sensor, distance_right = read_sensor(noseSensor_rightBase) -- Read the proximity sensor
-
-
+    frontSensor, distance_front = read_sensor(noseSensor_frontBase) -- Read the proximity sensor
+    rightSensor, distance_right = read_sensor(noseSensor_rightBase) -- Read the proximity sensor
 
 
     --ACTUATION section ----------------------------------------------------
-    
+    simTime = round(sim.getSimulationTime(), 0.01)
     if serial ~= -1 then   
     -- If an arduino board is present, send sensor data to it and retrieve instructions from it
-        send_data({front_sensor, distance_front, right_sensor, distance_right})
-        dataReceived = receive_data()     
+        send_data(serial, {simTime, distance_front, distance_right})
+        dataReceived = receive_data()
     end
-
+    
     -- Use the values received from the arduino to control your hovercraft 
-    if dataReceived == nil then
-        return
+   
+    if dataReceived ~= nil then
+        print(dataReceived)
+        
+        servo_position = dataReceived[1]            
+        thrustState = dataReceived[2]
+        thrustThrottle = dataReceived[3]
+        liftState = dataReceived[4]
+        
+        
+        set_servo(servoBase, servo_position)
+        set_thrust(thrust_fanBase, thrustState, thrustThrottle)
+        set_lift(lift_fanBase, liftState, body)
     end 
-    
-    servo_position = dataReceived[1]
-    thrustState = dataReceived[2]
-    thrustThrottle = dataReceived[3]
-    liftState = dataReceived[4]
-
-    set_servo(servoBase, servo_position)
-    set_thrust(thrust_fanBase, thrustState, thrustThrottle)
-    set_lift(lift_fanBase, liftState)
-
-
-
-    
     --*********************************************************
     sim.switchThread() -- resume in next simulation step
 end
@@ -199,7 +190,8 @@ end
 function receive_data()
 -- This function receives data from the arduino board 
 -- The data sent from the arduino MUST BE a comma-separated string
--- "###,###,###,###,..."
+-- terminated by a carriage & line return "\r\n"
+-- "###,###,###,###,...\r\n"
 -- Those numbers are then returned by this function as a table 
     -- {###,###,###,###,...}
 
@@ -273,7 +265,7 @@ function set_thrust(fanHandle,state,localThrottle)
     -- Throttle = 0.5   (will give partial thrust from the fan)
     -- Throttle = 1     (will give the maximum thrust from the fan)
 -- Function usage
-    -- set_thrust(fanHandle,throttle)
+    -- set_thrust(fanHandle, state,throttle)
     
     if (sim.getObjectType(fanHandle)==sim.object_forcesensor_type) then
         fanHandle = sim.getObjectChild(fanHandle,0)
@@ -300,75 +292,78 @@ function set_thrust(fanHandle,state,localThrottle)
     
 end
 
-function set_lift(liftFan, liftState)
+function set_lift(lift_fanBase, liftState, contactPatch)
 -- This function will activate and deactivate the lift simulation
 -- This is done by setting the appropriate physical properties on the main hovercraft body
 -- liftState: Activity state of the fan 
     -- liftState = 0     (lift OFF) 
     -- liftState = 1     (lift ON) 
 -- liftfan: must be the handle of the fan providing lift component model base 
+-- contactPatch: must be the handle of the contact patch of your hovercraft 
 -- Function usage
-    -- set_lift(liftFan, liftState)
+    -- set_lift(liftFan, liftState, contactPatch)
     
-    if (sim.getObjectType(liftFan)==sim.object_forcesensor_type) then
-        liftFan = sim.getObjectChild(liftFan,0)
+    if (sim.getObjectType(lift_fanBase)==sim.object_forcesensor_type) then
+        lift_fanBase = sim.getObjectChild(lift_fanBase,0)
     end
 
-    sim.setUserParameter(liftFan,'throttle',1)
-    sim.setUserParameter(liftFan,'lift',1)
+    sim.setUserParameter(lift_fanBase,'throttle',1)
+    sim.setUserParameter(lift_fanBase,'lift',1)
 
     if liftState == 1 and sim.getIntegerSignal('lift') == 0 then
 
-        XYSize = getBoundingBoxXYSize(body)
+        XYSize = getBoundingBoxXYSize(contactPatch)
         meanRadius = (XYSize[1] + XYSize[2]) / 2 / 2
         area = XYSize[1] * XYSize[2]
-        COMlocation, COMDelta, mass = getCenterOfMass(body)
-        --print("COMlocation X: "..COMlocation[1].."; COMlocation Y: ".. COMlocation[2].."; COMlocation Z: ".. COMlocation[3].."; area: "..area.."; meanRadius: "..meanRadius)
-        body_pressure = mass * 9.8 * area
-        fan_pressure = sim.getUserParameter(liftFan,"fanPressure")
+        COMlocation, COMDelta, mass = getCenterOfMass(contactPatch)
+        print("COMlocation X: "..COMlocation[1].."; COMlocation Y: ".. COMlocation[2].."; COMlocation Z: ".. COMlocation[3].."; area: "..area.."; meanRadius: "..meanRadius)
+        body_pressure = mass * 9.8 / area
+        fan_pressure = sim.getUserParameter(lift_fanBase,"fanPressure")
+        
+        if body_pressure >= fan_pressure then
+            friction = 0.1
+        elseif body_pressure >= fan_pressure/1.25 then
+            friction = -0.07/0.25 * (fan_pressure/body_pressure)  + 0.38
+        elseif body_pressure >= fan_pressure/2.5 then
+            friction = -0.02/1.25 * (fan_pressure/body_pressure)  + 0.05
+        elseif body_pressure < fan_pressure/2.5 then
+            friction = 0.01
+        end
+        print("body_pressure: "..body_pressure.."; fan_pressure: "..fan_pressure.."; friction:"..friction)
 
-        if fan_pressure <= body_pressure then 
-            friction = 0.2
-        elseif fan_pressure <= 25*body_pressure then
-            friction = 0.2 - 0.18/24 * fan_pressure/body_pressure
-        elseif fan_pressure > 25*body_pressure then
-            friction = 0.02
-        end  
-        --print("body_pressure: "..body_pressure.."; fan_pressure: "..fan_pressure.."; friction:"..friction)
-
-        if COMDelta <= 0.01*meanRadius then 
+        if COMDelta <= 0.01*meanRadius then
             --Friction coef is untouched
         elseif COMDelta <= 0.5*meanRadius then
-            friction = friction + (0.2-friction)/0.49 * (COMDelta/meanRadius-0.01)
-        elseif fan_pressure > 0.5*meanRadius then
-            friction = friction + (0.2-friction)
+            friction = friction + (0.1-friction)/0.49 * (COMDelta/meanRadius-0.01)
+        elseif COMDelta > 0.5*meanRadius then
+            friction = 0.1
         end 
-        --print("COMDelta: "..COMDelta.."; meanRadius: "..meanRadius.."; friction:"..friction)
+        print("COMDelta: "..COMDelta.."; meanRadius: "..meanRadius.."; friction:"..friction)
 
-        sim.setUserParameter(liftFan,'state',1)
+        sim.setUserParameter(lift_fanBase,'state',1)
         sim.setIntegerSignal('lift',1)
         
-        sim.setEngineFloatParameter(sim.newton_body_staticfriction,body,friction)
-        sim.setEngineFloatParameter(sim.newton_body_kineticfriction,body,friction)
-        sim.resetDynamicObject(body)
+        sim.setEngineFloatParameter(sim.newton_body_staticfriction,contactPatch,friction)
+        sim.setEngineFloatParameter(sim.newton_body_kineticfriction,contactPatch,friction)
+        sim.resetDynamicObject(contactPatch)
         
     elseif liftState == 0 and sim.getIntegerSignal('lift') == 1 then
-        sim.setUserParameter(liftFan,'state',0)
+        sim.setUserParameter(lift_fanBase,'state',0)
         sim.setIntegerSignal('lift',0)
         
-        sim.setEngineFloatParameter(sim.newton_body_staticfriction,body,0.2)
-        sim.setEngineFloatParameter(sim.newton_body_kineticfriction,body,0.09)
-        sim.resetDynamicObject(body)            
+        sim.setEngineFloatParameter(sim.newton_body_staticfriction,contactPatch,0.2)
+        sim.setEngineFloatParameter(sim.newton_body_kineticfriction,contactPatch,0.09)
+        sim.resetDynamicObject(contactPatch)            
     end
 end
 
 function getBoundingBoxXYSize(obj)
-    a, size1min = sim.getObjectFloatParameter(body, 15)
-    a, size2min = sim.getObjectFloatParameter(body, 16)
-    a, size3min = sim.getObjectFloatParameter(body, 17)
-    a, size1max = sim.getObjectFloatParameter(body, 18)
-    a, size2max = sim.getObjectFloatParameter(body, 19)
-    a, size3max = sim.getObjectFloatParameter(body, 20)
+    a, size1min = sim.getObjectFloatParameter(obj, 15)
+    a, size2min = sim.getObjectFloatParameter(obj, 16)
+    a, size3min = sim.getObjectFloatParameter(obj, 17)
+    a, size1max = sim.getObjectFloatParameter(obj, 18)
+    a, size2max = sim.getObjectFloatParameter(obj, 19)
+    a, size3max = sim.getObjectFloatParameter(obj, 20)
     size1 = size1max-size1min
     size2 = size2max-size2min
     size3 = size3max-size3min
